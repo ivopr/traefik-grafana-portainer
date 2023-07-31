@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  traefik:
+    image: traefik
+    command:
+      - "--log.level=DEBUG"
+      - "--api.dashboard=true"
+      - "--entryPoints.web.address=:80"
+      - "--metrics.prometheus=true"
+      - "--metrics.prometheus.buckets=0.1,0.3,1.2,5.0"
+      - "--metrics.prometheus.addrouterslabels=true"
+      - "--providers.docker=true"
+      - "--providers.docker.watch"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.email=greenfrog@email.com"  # replace with your email
+      - "--certificatesresolvers.letsencrypt.acme.storage=acme/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--entryPoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entryPoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entryPoints.web.http.redirections.entrypoint.permanent=true"
+      - "--certificatesresolvers.myresolver.acme.dnschallenge.provider=cloudflare"
+      - "--certificatesresolvers.myresolver.acme.dnschallenge.delaybeforecheck=0"
+    environment:
+      - CF_API_EMAIL=${CF_API_EMAIL}
+      - CF_API_KEY=${CF_API_KEY} 
+    labels:
+      - "traefik.http.routers.traefik.rule=Host(`${TRAEFIK_URL}`)"
+      - "traefik.http.routers.traefik.tls=true"
+      - "traefik.http.routers.traefik.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.traefik.tls.domains[0].main=${TRAEFIK_URL}"
+      - "traefik.http.routers.traefik.tls.domains[0].sans=*.${TRAEFIK_URL}"
+      - "traefik.http.routers.traefik.entryPoints=websecure"
+      - "traefik.http.routers.traefik.service=api@internal"
+      - "traefik.http.middlewares.traefik-auth.basicauth.users=${TRAEFIK_BASIC_AUTH}"
+      - "traefik.http.middlewares.traefik-auth.basicauth.removeheader=true"
+      - "traefik.http.routers.traefik.middlewares=traefik-auth"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./traefik/acme:/acme
+      - ./traefik/logs:/logs
+    ports:
+      - 80:80
+      - 443:443
+
+  prometheus:
+    image: prom/prometheus
+    user: root
+    volumes:
+      - ./prometheus/:/etc/prometheus/
+      - ${PROMETHEUS_VOLUME}:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    labels:
+      - "traefik.http.routers.prometheus.rule=Host(`${PROMETHEUS_URL}`)"
+      - "traefik.http.routers.prometheus.service=prometheus"
+      - "traefik.http.services.prometheus.loadbalancer.server.port=9090"
+      - "traefik.http.routers.prometheus.tls=true"
+      - "traefik.http.routers.prometheus.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.prometheus.tls.domains[0].main=${TRAEFIK_URL}"
+      - "traefik.http.routers.prometheus.tls.domains[0].sans=*.${TRAEFIK_URL}"
+      - "traefik.http.routers.prometheus.entryPoints=websecure"
+
+  grafana:
+    image: grafana/grafana
+    depends_on:
+      - prometheus
+    volumes:
+      - ${GRAFANA_VOLUME}:/var/lib/grafana
+      - ./grafana/provisioning/:/etc/grafana/provisioning/
+    env_file:
+      - ./grafana/config.monitoring
+    user: root
+    labels:
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+      - "traefik.http.routers.grafana.rule=Host(`${GRAFANA_URL}`)"
+      - "traefik.http.routers.grafana.service=grafana"
+      - "traefik.http.routers.grafana.tls=true"
+      - "traefik.http.routers.grafana.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.grafana.tls.domains[0].main=${TRAEFIK_URL}"
+      - "traefik.http.routers.grafana.tls.domains[0].sans=*.${TRAEFIK_URL}"
+      - "traefik.http.routers.grafana.entryPoints=websecure"
+
+  portainer:
+    image: portainer/portainer-ce
+    ports:
+      - 9000:9000
+      - 9443:9443
+    labels:
+      - "traefik.http.services.portainer.loadbalancer.server.port=9000"
+      - "traefik.http.routers.portainer.rule=Host(`${PORTAINER_URL}`)"
+      - "traefik.http.routers.portainer.service=portainer"
+      - "traefik.http.routers.portainer.tls=true"
+      - "traefik.http.routers.portainer.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.portainer.tls.domains[0].main=${TRAEFIK_URL}"
+      - "traefik.http.routers.portainer.tls.domains[0].sans=*.${TRAEFIK_URL}"
+      - "traefik.http.routers.portainer.entryPoints=websecure"
+    volumes:
+      - ${PORTAINER_VOLUME}:/data
+      - /var/run/docker.sock:/var/run/docker.sock
